@@ -16,13 +16,14 @@
             height: 100vh; 
             overflow: hidden; 
             color: #00ff96;
-            font-family: sans-serif;
+            font-family: 'Malgun Gothic', sans-serif;
         }
-        #loading { margin-bottom: 20px; text-align: center; }
+        #loading { margin-bottom: 20px; text-align: center; z-index: 10; }
         canvas { 
-            box-shadow: 0 0 50px rgba(0,0,0,0.9); 
+            box-shadow: 0 0 50px rgba(0,0,0,0.8); 
             border-radius: 4px;
             background-color: #000;
+            image-rendering: pixelated; /* 도트 그래픽 보정 */
         }
         .error-box {
             color: #ff4d4d;
@@ -35,13 +36,28 @@
             white-space: pre-wrap;
             font-family: monospace;
             overflow-y: auto;
-            max-height: 300px;
+            max-height: 400px;
+            z-index: 20;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #00ff96;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
     <div id="loading">
         <div style="font-size: 24px; font-weight: bold; margin-bottom: 10px;">AUGMENT CHESS</div>
+        <div class="spinner"></div>
         <div id="status">엔진 초기화 중...</div>
     </div>
     <div id="error" class="error-box"></div>
@@ -57,62 +73,71 @@
                 // 1. Pyodide 엔진 로드
                 const pyodide = await loadPyodide();
                 
-                // 2. 패키지 로드 시도 (pygame-ce 대신 내장된 pygame 사용)
-                status.innerText = "라이브러리 로드 중 (pygame)...";
+                // 2. micropip 설치 및 패키지 강제 로드
+                status.innerText = "라이브러리 환경 설정 중...";
+                await pyodide.loadPackage("micropip");
+                const micropip = pyodide.pyimport("micropip");
+                
+                status.innerText = "Pygame-CE 설치 중 (시간이 좀 걸릴 수 있습니다)...";
+                // Pyodide 공식 저장소에서 pygame-ce를 직접 설치 시도
                 try {
-                    await pyodide.loadPackage(["pygame"]);
+                    await micropip.install("pygame-ce");
                 } catch (e) {
-                    console.log("pygame 로딩 실패, micropip 시도 중...");
-                    await pyodide.loadPackage("micropip");
-                    const micropip = pyodide.pyimport("micropip");
+                    console.warn("pygame-ce 설치 실패, pygame 시도...");
                     await micropip.install("pygame");
                 }
 
                 // 3. 파이썬 파일 읽기 (파일명: pygame chess.py)
                 status.innerText = "게임 스크립트 불러오는 중...";
                 const response = await fetch('pygame chess.py');
-                if (!response.ok) throw new Error("'pygame chess.py' 파일을 찾을 수 없습니다. 파일명이 정확한지 확인해 주세요.");
+                if (!response.ok) throw new Error("'pygame chess.py' 파일을 찾지 못했습니다. 파일명을 확인해 주세요.");
                 const pythonCode = await response.text();
 
-                // 4. 원본 코드를 실행하기 위한 래퍼
-                // 사용자님의 GameApp 클래스를 찾아 웹용 루프를 돌립니다.
+                // 4. 실행 래퍼 (기존 코드의 모든 로직 유지)
                 const wrapper = `
 import asyncio
 import pygame
 import sys
+import io
+
+# 웹 환경 가상 디스플레이 설정
+pygame.init()
 
 # 원본 코드 실행
 exec_globals = {}
 try:
+    # 사용자 코드 내의 pygame.init() 등과 충돌하지 않도록 globals 설정
+    exec_globals['__name__'] = '__main__'
     exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", exec_globals)
 except Exception as e:
-    print(f"Python Error during exec: {e}")
+    import traceback
+    print(traceback.format_exc())
     raise e
 
 async def main():
+    # GameApp 인스턴스 확인
     if 'GameApp' in exec_globals:
-        # GameApp 인스턴스 생성
         app = exec_globals['GameApp']()
         
-        # Pyodide/Web 최적화 루프
+        # 웹용 비동기 메인 루프
         while True:
-            # 1. 그리기 호출
+            # 원본의 draw() 함수 실행
             app.draw()
-            pygame.display.update()
+            pygame.display.flip()
             
-            # 2. 이벤트 처리
+            # 이벤트 처리
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
                 # 원본 handle_click 호출
                 app.handle_click(event)
             
-            # 3. 브라우저가 화면을 갱신할 시간을 줌 (매우 중요)
-            await asyncio.sleep(0)
+            # 브라우저 렌더링을 위한 대기
+            await asyncio.sleep(0.01) # 약 60FPS 타겟
     else:
-        print("Error: 'GameApp' class not found in your script.")
+        print("Error: 'GameApp' class not found.")
 
-# 비동기 루프 시작
+# 비동기 실행 시작
 asyncio.ensure_future(main())
 `;
                 await pyodide.runPythonAsync(wrapper);
