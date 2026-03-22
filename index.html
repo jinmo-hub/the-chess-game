@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AUGMENT CHESS Web Runner</title>
-    <!-- Pyodide 버전을 안정적인 버전으로 고정합니다 -->
+    <!-- Pyodide 안정 버전 사용 -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
     <style>
         body { 
@@ -32,6 +32,8 @@
             border: 1px solid #ff4d4d;
             border-radius: 8px;
             display: none;
+            max-width: 80%;
+            word-break: break-all;
         }
     </style>
 </head>
@@ -53,52 +55,51 @@
                 // 1. Pyodide 로드
                 const pyodide = await loadPyodide();
                 
-                // 2. Pygame-ce 패키지 로드 (micropip 대신 공식 패키지 로더 사용)
+                // 2. Pygame-ce 패키지 직접 로드 (micropip 오류 우회)
                 status.innerText = "Pygame 라이브러리를 불러오는 중...";
                 await pyodide.loadPackage("pygame-ce");
 
-                // 3. 파이썬 원본 파일 읽기
+                // 3. 파이썬 원본 파일 읽기 (파일명: pygame_chess.py)
                 status.innerText = "게임 스크립트를 로드하는 중...";
-                const response = await fetch(encodeURIComponent('pygame_chess.py'));
-                if (!response.ok) throw new Error("'pygame_chess.py' 파일을 찾을 수 없습니다.");
+                const response = await fetch('pygame_chess.py');
+                if (!response.ok) throw new Error("'pygame_chess.py' 파일을 찾을 수 없습니다. 파일 이름을 확인해주세요.");
                 const pythonCode = await response.text();
 
-                // 4. 실행 래퍼 (원본 코드의 변수와 클래스를 그대로 유지)
-                // 사용자님의 GameApp() 클래스와 handle_click() 구조를 그대로 활용합니다.
+                // 4. 실행 래퍼
+                // 원본 파이썬 코드를 문자열로 감싸 exec()로 실행하며, 
+                // 브라우저 얼어붙음 방지를 위해 asyncio 루프만 덧씌웁니다.
                 const wrapper = `
 import asyncio
 import pygame
 import sys
-import io
 
-# 원본 코드 주입 및 실행 (전역 공간 확보)
+# 원본 코드 실행 (전역 공간 확보)
 orig_globals = {}
+# 코드를 그대로 실행하되, 원본의 루프(run)를 직접 호출하지 않고 클래스를 가져옵니다.
 exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", orig_globals)
 
 async def main():
-    # 원본 코드의 GameApp 클래스 찾기
+    # 원본 코드의 GameApp 클래스 인스턴스 생성
     if 'GameApp' in orig_globals:
         app = orig_globals['GameApp']()
         
-        # 웹 환경을 위한 비동기 메인 루프
-        # 원본의 draw()와 handle_click() 로직을 100% 보존하며 실행합니다.
+        # 웹 환경 최적화 루프: 원본의 draw()와 handle_click()을 그대로 사용
         while True:
             app.draw()
             pygame.display.update()
             
-            # 이벤트 처리
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
-                # 원본 클래스의 클릭 핸들러 호출
+                # 원본 클래스의 클릭 로직 호출
                 app.handle_click(event)
             
-            # 브라우저 렌더링을 위해 제어권 양보 (이게 없으면 멈춤)
+            # 브라우저에 제어권 양보
             await asyncio.sleep(0)
     else:
-        print("Error: 'GameApp' class not found in python script.")
+        print("Error: 'GameApp' class not found.")
 
-# 비동기 루프 예약
+# 비동기 실행 시작
 asyncio.ensure_future(main())
 `;
                 await pyodide.runPythonAsync(wrapper);
@@ -107,12 +108,11 @@ asyncio.ensure_future(main())
             } catch (err) {
                 loading.style.display = 'none';
                 errorBox.style.display = 'block';
-                errorBox.innerHTML = "<strong>실행 오류 발생:</strong><br>" + err.message;
+                errorBox.innerHTML = "<strong>실행 오류:</strong><br>" + err.message;
                 console.error(err);
             }
         }
 
-        // 페이지 로드 시 실행
         window.onload = runGame;
     </script>
 </body>
