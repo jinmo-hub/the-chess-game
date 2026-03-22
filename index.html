@@ -19,7 +19,7 @@
             await pyodide.loadPackage(["pygame-ce"]);
 
             // 1. 같은 폴더에 있는 파이썬 파일을 읽어옵니다.
-            const response = await fetch('pygame chess.py');
+            const response = await fetch('pygame_chess.py');
             const pythonCode = await response.text();
 
             // 2. 브라우저에서 실행 가능하도록 래핑하여 실행합니다.
