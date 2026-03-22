@@ -3,7 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AUGMENT CHESS Web Runner</title>
+    <title>AUGMENT CHESS - Web Port</title>
+    <!-- Pyodide 최신 안정 버전 로드 -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
     <style>
         body { 
@@ -14,10 +15,11 @@
             justify-content: center; 
             align-items: center; 
             height: 100vh; 
+            overflow: hidden; 
             color: #00ff96;
-            font-family: 'Malgun Gothic', sans-serif;
+            font-family: sans-serif;
         }
-        #status-container { text-align: center; margin-bottom: 20px; }
+        #status-container { text-align: center; }
         .spinner {
             border: 4px solid rgba(255, 255, 255, 0.1);
             width: 40px;
@@ -25,125 +27,122 @@
             border-radius: 50%;
             border-left-color: #00ff96;
             animation: spin 1s linear infinite;
-            margin: 15px auto;
+            margin: 20px auto;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        canvas { border: 2px solid #333; box-shadow: 0 0 30px rgba(0,255,150,0.1); display: none; }
+        canvas { 
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.9);
+            display: none; 
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
+        }
         #error-log {
-            color: #ff4d4d;
-            background: #1a1a1a;
-            padding: 15px;
-            border-radius: 5px;
             display: none;
-            max-width: 90%;
-            font-size: 12px;
+            background: #1a0000;
+            color: #ff6666;
+            padding: 20px;
+            border-radius: 10px;
+            max-width: 80%;
             white-space: pre-wrap;
-            text-align: left;
+            font-family: monospace;
+            border: 1px solid #440000;
         }
     </style>
 </head>
 <body>
     <div id="status-container">
-        <div style="font-size: 20px; letter-spacing: 2px;">AUGMENT CHESS</div>
+        <div style="font-size: 24px; font-weight: bold; letter-spacing: 2px;">AUGMENT CHESS</div>
+        <div style="font-size: 12px; opacity: 0.5; margin-bottom: 20px;">V13.0 PROFESSIONAL</div>
         <div class="spinner" id="loader"></div>
-        <div id="status-text">파이썬 엔진 시동 중...</div>
+        <div id="status-text">엔진 초기화 중...</div>
     </div>
+
     <div id="error-log"></div>
     <canvas id="canvas"></canvas>
 
     <script type="text/javascript">
-        async function start() {
+        async function main() {
             const status = document.getElementById('status-text');
             const errorLog = document.getElementById('error-log');
             const loader = document.getElementById('loader');
             const canvas = document.getElementById('canvas');
 
             try {
-                // 1. Pyodide 로드
+                // 1. Pyodide 초기 로드
                 const pyodide = await loadPyodide();
                 
-                // 2. 패키지 설치용 micropip 로드 (이건 공식 패키지라 무조건 됨)
-                status.innerText = "패키지 관리자 준비 중...";
-                await pyodide.loadPackage("micropip");
-                
-                // 3. micropip으로 직접 pygame-ce 설치 시도 (loadPackage 대신)
-                status.innerText = "Pygame 엔진 설치 중 (약 30초 소요)...";
-                await pyodide.runPythonAsync(`
-                    import micropip
-                    try:
-                        await micropip.install("pygame-ce")
-                        print("pygame-ce installed")
-                    except Exception as e:
-                        print(f"ce fail: {e}")
-                        await micropip.install("pygame")
-                `);
+                // 2. Pyodide 내장 pygame-ce 패키지 직접 로드 (micropip 미사용)
+                status.innerText = "Pygame (Web Edition) 로드 중...";
+                await pyodide.loadPackage("pygame-ce");
 
-                // 4. 파이썬 코드 가져오기
-                status.innerText = "게임 스크립트 로딩...";
-                const res = await fetch('pygame chess.py');
-                if (!res.ok) throw new Error("파일을 찾을 수 없습니다: pygame chess.py");
-                const code = await res.ok ? await res.text() : "";
+                // 3. 파이썬 파일 읽기 (사용자님의 원본 코드)
+                status.innerText = "게임 코드 불러오는 중...";
+                const response = await fetch('pygame_chess.py');
+                if (!response.ok) throw new Error("pygame_chess.py 파일을 찾을 수 없습니다.");
+                const pythonCode = await response.text();
 
-                // 5. 실행 및 브라우저 환경 싱크
-                status.innerText = "게임 시작 준비 완료!";
-                
+                // 4. 웹 실행용 래퍼 (원본 코드 훼손 방지)
                 const wrapper = `
 import asyncio
 import pygame
 import sys
+import io
 
-# Pygame 초기화 (캔버스 타겟 지정)
-pygame.init()
+# 폰트 에러 방지를 위한 더미 폰트 설정 (웹 환경 대응)
+pygame.font.init()
 
-# 메인 코드 실행
-namespace = {"__name__": "__main__"}
+# 원본 코드 실행
+namespace = {}
 try:
-    exec("""${code.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}""", namespace)
+    exec("""${pythonCode.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}""", namespace)
 except Exception as e:
     import traceback
     print(traceback.format_exc())
     raise e
 
-async def main_loop():
+async def run_loop():
     if 'GameApp' not in namespace:
-        print("GameApp 클래스를 찾을 수 없습니다.")
+        print("Error: GameApp class not found in your script.")
         return
 
+    # 게임 앱 인스턴스 생성
     app = namespace['GameApp']()
     
-    # 웹 환경 무한 루프
+    # 웹 브라우저 최적화 루프
     while True:
-        # 그리기
         app.draw()
         pygame.display.flip()
         
-        # 이벤트 처리
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return
             app.handle_click(event)
         
-        # 브라우저에 제어권 양보 (필수)
+        # 10ms 대기 (브라우저가 화면을 그릴 시간을 줌)
         await asyncio.sleep(0.01)
 
-# 실행
-asyncio.ensure_future(main_loop())
+# 비동기 실행 시작
+asyncio.ensure_future(run_loop())
 `;
+
+                // 파이썬 실행
                 await pyodide.runPythonAsync(wrapper);
-                
-                // UI 전환
+
+                // 화면 전환
                 document.getElementById('status-container').style.display = 'none';
                 canvas.style.display = 'block';
+                canvas.id = "canvas"; // Pygame이 이 ID를 찾도록 보장
 
-            } catch (e) {
+            } catch (err) {
                 loader.style.display = 'none';
-                status.innerText = "❌ 오류가 발생했습니다";
+                status.innerText = "구동 실패";
                 errorLog.style.display = 'block';
-                errorLog.innerText = e.message;
-                console.error(e);
+                errorLog.innerText = err.stack || err.message;
+                console.error(err);
             }
         }
-        window.onload = start;
+
+        window.onload = main;
     </script>
 </body>
 </html>
