@@ -16,7 +16,9 @@
     <script type="text/javascript">
         async function runGame() {
             const pyodide = await loadPyodide();
-            await pyodide.loadPackage(["pygame-ce"]);
+            await pyodide.loadPackage("micropip");
+            const micropip = pyodide.pyimport("micropip");
+            await micropip.install("pygame-ce");
 
             // 1. 같은 폴더에 있는 파이썬 파일을 읽어옵니다.
             const response = await fetch('pygame_chess.py');
