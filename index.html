@@ -24,6 +24,7 @@
             box-shadow: 0 0 50px rgba(0,0,0,0.9); 
             border-radius: 4px;
             background-color: #000;
+            cursor: default;
         }
         .error-box {
             color: #ff4d4d;
@@ -34,6 +35,8 @@
             display: none;
             max-width: 80%;
             word-break: break-all;
+            white-space: pre-wrap;
+            font-family: monospace;
         }
     </style>
 </head>
@@ -50,66 +53,80 @@
             const status = document.getElementById('status');
             const errorBox = document.getElementById('error');
             const loading = document.getElementById('loading');
+            const canvas = document.getElementById('canvas');
 
             try {
                 // 1. Pyodide 로드
                 const pyodide = await loadPyodide();
                 
-                // 2. Pygame-ce 패키지 직접 로드 (micropip 오류 우회)
-                status.innerText = "Pygame 라이브러리를 불러오는 중...";
-                await pyodide.loadPackage("pygame-ce");
+                // 2. 오류의 원인인 micropip 대신 빌트인 로더 사용
+                status.innerText = "Pygame 라이브러리(CE)를 구성하는 중...";
+                // loadPackage는 Pyodide 배포판에 포함된 최적화된 바이너리를 직접 가져옵니다.
+                await pyodide.loadPackage(["pygame-ce", "micropip"]);
 
                 // 3. 파이썬 원본 파일 읽기 (파일명: pygame_chess.py)
                 status.innerText = "게임 스크립트를 로드하는 중...";
+                // 사용자님의 실제 파일명인 pygame_chess.py를 호출합니다.
                 const response = await fetch('pygame_chess.py');
-                if (!response.ok) throw new Error("'pygame_chess.py' 파일을 찾을 수 없습니다. 파일 이름을 확인해주세요.");
+                if (!response.ok) throw new Error("'pygame_chess.py' 파일을 찾을 수 없습니다.");
                 const pythonCode = await response.text();
 
-                // 4. 실행 래퍼
-                // 원본 파이썬 코드를 문자열로 감싸 exec()로 실행하며, 
-                // 브라우저 얼어붙음 방지를 위해 asyncio 루프만 덧씌웁니다.
+                // 4. 웹 환경 실행용 래퍼 (원본 코드 보존)
+                // 원본 코드를 문자열로 처리하여 exec()로 실행합니다.
                 const wrapper = `
 import asyncio
 import pygame
 import sys
+import io
 
-# 원본 코드 실행 (전역 공간 확보)
+# Pyodide 전용 캔버스 설정
+canvas = document.getElementById('canvas')
+
+# 원본 코드 실행 (전역 공간 유지)
 orig_globals = {}
-# 코드를 그대로 실행하되, 원본의 루프(run)를 직접 호출하지 않고 클래스를 가져옵니다.
-exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", orig_globals)
+# 사용자님의 코드를 그대로 실행하되, 내부에서 호출되는 블로킹 함수들을 우회하기 위해 전역 객체로 처리
+try:
+    exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", orig_globals)
+except Exception as e:
+    print(f"Python Exec Error: {e}")
 
 async def main():
-    # 원본 코드의 GameApp 클래스 인스턴스 생성
+    # 원본 코드의 GameApp 클래스 인스턴스 확인
     if 'GameApp' in orig_globals:
         app = orig_globals['GameApp']()
         
-        # 웹 환경 최적화 루프: 원본의 draw()와 handle_click()을 그대로 사용
+        # 메인 루프: 원본의 draw()와 handle_click()을 웹 비동기 방식으로 호출
         while True:
+            # 1. 화면 그리기
             app.draw()
             pygame.display.update()
             
+            # 2. 이벤트 처리
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
-                # 원본 클래스의 클릭 로직 호출
+                # 원본 클래스의 클릭 로직 그대로 호출
                 app.handle_click(event)
             
-            # 브라우저에 제어권 양보
+            # 3. 브라우저 렌더링을 위해 제어권 양보 (필수)
             await asyncio.sleep(0)
     else:
-        print("Error: 'GameApp' class not found.")
+        print("Fatal Error: 'GameApp' class not found in pygame_chess.py")
 
-# 비동기 실행 시작
+# 비동기 실행 루프 시작
 asyncio.ensure_future(main())
 `;
+                // Pyodide에 캔버스 객체 전달
+                pyodide.globals.set("document", document);
+                
                 await pyodide.runPythonAsync(wrapper);
                 loading.style.display = 'none';
 
             } catch (err) {
                 loading.style.display = 'none';
                 errorBox.style.display = 'block';
-                errorBox.innerHTML = "<strong>실행 오류:</strong><br>" + err.message;
-                console.error(err);
+                errorBox.innerText = "실행 에러 발생:\n" + err.message;
+                console.error("Pyodide Error:", err);
             }
         }
 
