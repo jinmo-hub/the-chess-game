@@ -3,53 +3,75 @@
 <head>
     <meta charset="utf-8">
     <title>AUGMENT CHESS Web Runner</title>
+    <!-- Pyodide 버전을 최신으로 유지합니다 -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
     <style>
         body { background-color: #141419; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-        #loading { color: #00ff96; font-family: sans-serif; position: absolute; }
+        #loading { color: #00ff96; font-family: sans-serif; position: absolute; text-align: center; line-height: 1.6; }
+        canvas { box-shadow: 0 0 40px rgba(0,0,0,0.8); }
     </style>
 </head>
 <body>
-    <div id="loading">게임 데이터를 불러오는 중...</div>
+    <div id="loading">증강 체스 엔진 로드 중...<br>약 10~15초 정도 소요됩니다.</div>
     <canvas id="canvas"></canvas>
 
     <script type="text/javascript">
         async function runGame() {
-            const pyodide = await loadPyodide();
-            await pyodide.loadPackage("micropip");
-            const micropip = pyodide.pyimport("micropip");
-            await micropip.install("pygame-ce");
+            const loading = document.getElementById('loading');
+            try {
+                const pyodide = await loadPyodide();
+                
+                // [수정된 부분] 공식적으로 지원되는 pygame-ce 패키지를 직접 로드합니다.
+                loading.innerText = "Pygame 라이브러리 설치 중...";
+                await pyodide.loadPackage("pygame-ce");
 
-            // 1. 같은 폴더에 있는 파이썬 파일을 읽어옵니다.
-            const response = await fetch('pygame_chess.py');
-            const pythonCode = await response.text();
+                // 파이썬 파일 읽기 (띄어쓰기가 있는 경우를 위해 encodeURIComponent 사용)
+                const response = await fetch(encodeURIComponent('pygame_chess.py'));
+                if (!response.ok) throw new Error("파일을 찾지 못했습니다. 'pygame chess.py'가 저장소에 있는지 확인하세요.");
+                const pythonCode = await response.text();
 
-            // 2. 브라우저에서 실행 가능하도록 래핑하여 실행합니다.
-            const wrapper = `
+                // 원본 코드를 보존하며 브라우저 비동기 환경에 맞게 실행하는 래퍼
+                const wrapper = `
 import asyncio
 import pygame
+import sys
 
-# 오리지널 코드 실행 환경 구축
-exec_globals = {}
-exec("""${pythonCode.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}""", exec_globals)
+# 1. 원본 코드 실행 (사용자님의 코드를 문자열로 받아 독립적인 공간에서 실행)
+# 원본에 있는 전역 변수와 클래스들을 보존합니다.
+original_globals = {}
+exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", original_globals)
 
 async def main():
-    # 원본의 GameApp 인스턴스 생성 (사용자님 코드 구조 유지)
-    if 'GameApp' in exec_globals:
-        app = exec_globals['GameApp']()
-        # 원본의 run() 대신 웹용 비동기 루프 실행
+    # 2. 원본 코드에서 GameApp 클래스를 찾아 인스턴스 생성
+    if 'GameApp' in original_globals:
+        app = original_globals['GameApp']()
+        
+        # 3. 브라우저용 비동기 메인 루프 (원본의 로직을 그대로 사용)
         while True:
+            # 원본의 draw()와 display.update() 호출
             app.draw()
             pygame.display.update()
+            
+            # 브라우저가 멈추지 않게 제어권 양보
             await asyncio.sleep(0)
+            
+            # 원본의 handle_click()으로 이벤트 전달
             for event in pygame.event.get():
-                app.handle_click(event)
                 if event.type == pygame.QUIT: return
+                # MOUSEBUTTONDOWN 등 모든 이벤트를 원본 핸들러에 전달
+                app.handle_click(event)
 
+# 비동기 루프 시작
 asyncio.ensure_future(main())
 `;
-            await pyodide.runPythonAsync(wrapper);
-            document.getElementById('loading').style.display = 'none';
+                await pyodide.runPythonAsync(wrapper);
+                loading.style.display = 'none';
+
+            } catch (err) {
+                loading.style.color = "#ff4d4d";
+                loading.innerHTML = "❌ 실행 오류 발생<br>" + err.message + "<br><br>파일 이름이 'pygame_chess.py'인지 다시 확인해 주세요.";
+                console.error(err);
+            }
         }
         runGame();
     </script>
