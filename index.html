@@ -14,143 +14,136 @@
             justify-content: center; 
             align-items: center; 
             height: 100vh; 
-            overflow: hidden; 
             color: #00ff96;
             font-family: 'Malgun Gothic', sans-serif;
         }
-        #loading { margin-bottom: 20px; text-align: center; z-index: 10; }
-        canvas { 
-            box-shadow: 0 0 50px rgba(0,0,0,0.8); 
-            border-radius: 4px;
-            background-color: #000;
-            image-rendering: pixelated; /* 도트 그래픽 보정 */
-        }
-        .error-box {
-            color: #ff4d4d;
-            background: rgba(255,0,0,0.1);
-            padding: 20px;
-            border: 1px solid #ff4d4d;
-            border-radius: 8px;
-            display: none;
-            max-width: 80%;
-            white-space: pre-wrap;
-            font-family: monospace;
-            overflow-y: auto;
-            max-height: 400px;
-            z-index: 20;
-        }
+        #status-container { text-align: center; margin-bottom: 20px; }
         .spinner {
             border: 4px solid rgba(255, 255, 255, 0.1);
-            width: 36px;
-            height: 36px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             border-left-color: #00ff96;
             animation: spin 1s linear infinite;
-            margin: 10px auto;
+            margin: 15px auto;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        canvas { border: 2px solid #333; box-shadow: 0 0 30px rgba(0,255,150,0.1); display: none; }
+        #error-log {
+            color: #ff4d4d;
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+            max-width: 90%;
+            font-size: 12px;
+            white-space: pre-wrap;
+            text-align: left;
         }
     </style>
 </head>
 <body>
-    <div id="loading">
-        <div style="font-size: 24px; font-weight: bold; margin-bottom: 10px;">AUGMENT CHESS</div>
-        <div class="spinner"></div>
-        <div id="status">엔진 초기화 중...</div>
+    <div id="status-container">
+        <div style="font-size: 20px; letter-spacing: 2px;">AUGMENT CHESS</div>
+        <div class="spinner" id="loader"></div>
+        <div id="status-text">파이썬 엔진 시동 중...</div>
     </div>
-    <div id="error" class="error-box"></div>
+    <div id="error-log"></div>
     <canvas id="canvas"></canvas>
 
     <script type="text/javascript">
-        async function runGame() {
-            const status = document.getElementById('status');
-            const errorBox = document.getElementById('error');
-            const loading = document.getElementById('loading');
+        async function start() {
+            const status = document.getElementById('status-text');
+            const errorLog = document.getElementById('error-log');
+            const loader = document.getElementById('loader');
+            const canvas = document.getElementById('canvas');
 
             try {
-                // 1. Pyodide 엔진 로드
+                // 1. Pyodide 로드
                 const pyodide = await loadPyodide();
                 
-                // 2. micropip 설치 및 패키지 강제 로드
-                status.innerText = "라이브러리 환경 설정 중...";
+                // 2. 패키지 설치용 micropip 로드 (이건 공식 패키지라 무조건 됨)
+                status.innerText = "패키지 관리자 준비 중...";
                 await pyodide.loadPackage("micropip");
-                const micropip = pyodide.pyimport("micropip");
                 
-                status.innerText = "Pygame-CE 설치 중 (시간이 좀 걸릴 수 있습니다)...";
-                // Pyodide 공식 저장소에서 pygame-ce를 직접 설치 시도
-                try {
-                    await micropip.install("pygame-ce");
-                } catch (e) {
-                    console.warn("pygame-ce 설치 실패, pygame 시도...");
-                    await micropip.install("pygame");
-                }
+                // 3. micropip으로 직접 pygame-ce 설치 시도 (loadPackage 대신)
+                status.innerText = "Pygame 엔진 설치 중 (약 30초 소요)...";
+                await pyodide.runPythonAsync(`
+                    import micropip
+                    try:
+                        await micropip.install("pygame-ce")
+                        print("pygame-ce installed")
+                    except Exception as e:
+                        print(f"ce fail: {e}")
+                        await micropip.install("pygame")
+                `);
 
-                // 3. 파이썬 파일 읽기 (파일명: pygame chess.py)
-                status.innerText = "게임 스크립트 불러오는 중...";
-                const response = await fetch('pygame chess.py');
-                if (!response.ok) throw new Error("'pygame chess.py' 파일을 찾지 못했습니다. 파일명을 확인해 주세요.");
-                const pythonCode = await response.text();
+                // 4. 파이썬 코드 가져오기
+                status.innerText = "게임 스크립트 로딩...";
+                const res = await fetch('pygame chess.py');
+                if (!res.ok) throw new Error("파일을 찾을 수 없습니다: pygame chess.py");
+                const code = await res.ok ? await res.text() : "";
 
-                // 4. 실행 래퍼 (기존 코드의 모든 로직 유지)
+                // 5. 실행 및 브라우저 환경 싱크
+                status.innerText = "게임 시작 준비 완료!";
+                
                 const wrapper = `
 import asyncio
 import pygame
 import sys
-import io
 
-# 웹 환경 가상 디스플레이 설정
+# Pygame 초기화 (캔버스 타겟 지정)
 pygame.init()
 
-# 원본 코드 실행
-exec_globals = {}
+# 메인 코드 실행
+namespace = {"__name__": "__main__"}
 try:
-    # 사용자 코드 내의 pygame.init() 등과 충돌하지 않도록 globals 설정
-    exec_globals['__name__'] = '__main__'
-    exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", exec_globals)
+    exec("""${code.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}""", namespace)
 except Exception as e:
     import traceback
     print(traceback.format_exc())
     raise e
 
-async def main():
-    # GameApp 인스턴스 확인
-    if 'GameApp' in exec_globals:
-        app = exec_globals['GameApp']()
-        
-        # 웹용 비동기 메인 루프
-        while True:
-            # 원본의 draw() 함수 실행
-            app.draw()
-            pygame.display.flip()
-            
-            # 이벤트 처리
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    return
-                # 원본 handle_click 호출
-                app.handle_click(event)
-            
-            # 브라우저 렌더링을 위한 대기
-            await asyncio.sleep(0.01) # 약 60FPS 타겟
-    else:
-        print("Error: 'GameApp' class not found.")
+async def main_loop():
+    if 'GameApp' not in namespace:
+        print("GameApp 클래스를 찾을 수 없습니다.")
+        return
 
-# 비동기 실행 시작
-asyncio.ensure_future(main())
+    app = namespace['GameApp']()
+    
+    # 웹 환경 무한 루프
+    while True:
+        # 그리기
+        app.draw()
+        pygame.display.flip()
+        
+        # 이벤트 처리
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return
+            app.handle_click(event)
+        
+        # 브라우저에 제어권 양보 (필수)
+        await asyncio.sleep(0.01)
+
+# 실행
+asyncio.ensure_future(main_loop())
 `;
                 await pyodide.runPythonAsync(wrapper);
-                loading.style.display = 'none';
+                
+                // UI 전환
+                document.getElementById('status-container').style.display = 'none';
+                canvas.style.display = 'block';
 
-            } catch (err) {
-                loading.style.display = 'none';
-                errorBox.style.display = 'block';
-                errorBox.innerText = "실행 에러 발생:\n" + err.message;
-                console.error(err);
+            } catch (e) {
+                loader.style.display = 'none';
+                status.innerText = "❌ 오류가 발생했습니다";
+                errorLog.style.display = 'block';
+                errorLog.innerText = e.message;
+                console.error(e);
             }
         }
-        window.onload = runGame;
+        window.onload = start;
     </script>
 </body>
 </html>
