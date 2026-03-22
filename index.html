@@ -1,79 +1,119 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AUGMENT CHESS Web Runner</title>
-    <!-- Pyodide 버전을 최신으로 유지합니다 -->
+    <!-- Pyodide 버전을 안정적인 버전으로 고정합니다 -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
     <style>
-        body { background-color: #141419; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-        #loading { color: #00ff96; font-family: sans-serif; position: absolute; text-align: center; line-height: 1.6; }
-        canvas { box-shadow: 0 0 40px rgba(0,0,0,0.8); }
+        body { 
+            background-color: #0e0e12; 
+            margin: 0; 
+            display: flex; 
+            flex-direction: column;
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            overflow: hidden; 
+            color: #00ff96;
+            font-family: 'Malgun Gothic', sans-serif;
+        }
+        #loading { margin-bottom: 20px; text-align: center; }
+        canvas { 
+            box-shadow: 0 0 50px rgba(0,0,0,0.9); 
+            border-radius: 4px;
+            background-color: #000;
+        }
+        .error-box {
+            color: #ff4d4d;
+            background: rgba(255,0,0,0.1);
+            padding: 20px;
+            border: 1px solid #ff4d4d;
+            border-radius: 8px;
+            display: none;
+        }
     </style>
 </head>
 <body>
-    <div id="loading">증강 체스 엔진 로드 중...<br>약 10~15초 정도 소요됩니다.</div>
+    <div id="loading">
+        <div style="font-size: 24px; font-weight: bold; margin-bottom: 10px;">AUGMENT CHESS</div>
+        <div id="status">엔진을 초기화하는 중...</div>
+    </div>
+    <div id="error" class="error-box"></div>
     <canvas id="canvas"></canvas>
 
     <script type="text/javascript">
         async function runGame() {
+            const status = document.getElementById('status');
+            const errorBox = document.getElementById('error');
             const loading = document.getElementById('loading');
+
             try {
+                // 1. Pyodide 로드
                 const pyodide = await loadPyodide();
                 
-                // [수정된 부분] 공식적으로 지원되는 pygame-ce 패키지를 직접 로드합니다.
-                loading.innerText = "Pygame 라이브러리 설치 중...";
+                // 2. Pygame-ce 패키지 로드 (micropip 대신 공식 패키지 로더 사용)
+                status.innerText = "Pygame 라이브러리를 불러오는 중...";
                 await pyodide.loadPackage("pygame-ce");
 
-                // 파이썬 파일 읽기 (띄어쓰기가 있는 경우를 위해 encodeURIComponent 사용)
+                // 3. 파이썬 원본 파일 읽기
+                status.innerText = "게임 스크립트를 로드하는 중...";
                 const response = await fetch(encodeURIComponent('pygame_chess.py'));
-                if (!response.ok) throw new Error("파일을 찾지 못했습니다. 'pygame chess.py'가 저장소에 있는지 확인하세요.");
+                if (!response.ok) throw new Error("'pygame_chess.py' 파일을 찾을 수 없습니다.");
                 const pythonCode = await response.text();
 
-                // 원본 코드를 보존하며 브라우저 비동기 환경에 맞게 실행하는 래퍼
+                // 4. 실행 래퍼 (원본 코드의 변수와 클래스를 그대로 유지)
+                // 사용자님의 GameApp() 클래스와 handle_click() 구조를 그대로 활용합니다.
                 const wrapper = `
 import asyncio
 import pygame
 import sys
+import io
 
-# 1. 원본 코드 실행 (사용자님의 코드를 문자열로 받아 독립적인 공간에서 실행)
-# 원본에 있는 전역 변수와 클래스들을 보존합니다.
-original_globals = {}
-exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", original_globals)
+# 원본 코드 주입 및 실행 (전역 공간 확보)
+orig_globals = {}
+exec("""${pythonCode.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\\"').replace(/\\$/g, '\\\\$')}""", orig_globals)
 
 async def main():
-    # 2. 원본 코드에서 GameApp 클래스를 찾아 인스턴스 생성
-    if 'GameApp' in original_globals:
-        app = original_globals['GameApp']()
+    # 원본 코드의 GameApp 클래스 찾기
+    if 'GameApp' in orig_globals:
+        app = orig_globals['GameApp']()
         
-        # 3. 브라우저용 비동기 메인 루프 (원본의 로직을 그대로 사용)
+        # 웹 환경을 위한 비동기 메인 루프
+        # 원본의 draw()와 handle_click() 로직을 100% 보존하며 실행합니다.
         while True:
-            # 원본의 draw()와 display.update() 호출
             app.draw()
             pygame.display.update()
             
-            # 브라우저가 멈추지 않게 제어권 양보
-            await asyncio.sleep(0)
-            
-            # 원본의 handle_click()으로 이벤트 전달
+            # 이벤트 처리
             for event in pygame.event.get():
-                if event.type == pygame.QUIT: return
-                # MOUSEBUTTONDOWN 등 모든 이벤트를 원본 핸들러에 전달
+                if event.type == pygame.QUIT:
+                    return
+                # 원본 클래스의 클릭 핸들러 호출
                 app.handle_click(event)
+            
+            # 브라우저 렌더링을 위해 제어권 양보 (이게 없으면 멈춤)
+            await asyncio.sleep(0)
+    else:
+        print("Error: 'GameApp' class not found in python script.")
 
-# 비동기 루프 시작
+# 비동기 루프 예약
 asyncio.ensure_future(main())
 `;
                 await pyodide.runPythonAsync(wrapper);
                 loading.style.display = 'none';
 
             } catch (err) {
-                loading.style.color = "#ff4d4d";
-                loading.innerHTML = "❌ 실행 오류 발생<br>" + err.message + "<br><br>파일 이름이 'pygame_chess.py'인지 다시 확인해 주세요.";
+                loading.style.display = 'none';
+                errorBox.style.display = 'block';
+                errorBox.innerHTML = "<strong>실행 오류 발생:</strong><br>" + err.message;
                 console.error(err);
             }
         }
-        runGame();
+
+        // 페이지 로드 시 실행
+        window.onload = runGame;
     </script>
 </body>
 </html>
